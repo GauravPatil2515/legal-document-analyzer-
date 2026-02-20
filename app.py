@@ -2,93 +2,172 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
-import httpx, os, re
+import httpx, os, re, pathlib
 
 app = FastAPI()
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 class Req(BaseModel):
-    data: str
+    data: str = ""
 
-LEGAL_TERMS = {
-    "hereinafter": "from now on", "whereas": "since", "thereof": "of that",
-    "hereby": "by this", "notwithstanding": "despite", "pursuant to": "according to",
-    "indemnify": "protect from loss", "indemnification": "protection from loss",
-    "aforementioned": "mentioned earlier", "herein": "in this document",
-    "shall": "will", "thereof": "of that", "therein": "in that",
-    "forthwith": "immediately", "henceforth": "from now on",
-    "inter alia": "among other things", "pro rata": "proportionally",
-    "bona fide": "genuine", "de facto": "in practice", "ipso facto": "by that fact",
-    "mutatis mutandis": "with necessary changes", "prima facie": "at first sight",
-    "viz.": "namely", "i.e.": "that is", "e.g.": "for example",
-    "liability": "legal responsibility", "jurisdiction": "legal authority",
-    "arbitration": "dispute resolution outside court", "tort": "wrongful act causing harm",
-    "plaintiff": "person who sues", "defendant": "person being sued",
-    "statute": "written law", "breach": "violation", "fiduciary": "trust-based",
-    "lien": "legal claim on property", "waiver": "giving up a right",
-    "stipulate": "require as a condition", "rescind": "cancel",
-    "null and void": "invalid and unenforceable", "force majeure": "unforeseeable circumstances",
-    "quid pro quo": "something for something", "subpoena": "court order to appear",
-    "affidavit": "sworn written statement", "deposition": "sworn testimony outside court",
-    "amicus curiae": "friend of the court", "habeas corpus": "produce the person in court",
-    "in lieu of": "instead of", "pro bono": "free of charge",
-    "caveat emptor": "buyer beware", "due diligence": "careful investigation",
+TERMS = {
+    "indemnify and hold harmless": "protect and not blame",
+    "null and void": "completely invalid",
+    "terms and conditions": "rules you must follow",
+    "cease and desist": "stop immediately",
+    "due diligence": "careful investigation",
+    "force majeure": "unforeseeable extraordinary events",
+    "caveat emptor": "buyer beware",
+    "quid pro quo": "something given in exchange",
+    "habeas corpus": "produce the person in court",
+    "amicus curiae": "friend of the court",
+    "bona fide": "genuine / in good faith",
+    "de facto": "in practice",
+    "ipso facto": "by that very fact",
+    "mutatis mutandis": "with necessary changes made",
+    "prima facie": "at first sight / on the face of it",
+    "pro rata": "proportionally",
+    "inter alia": "among other things",
+    "in lieu of": "instead of",
+    "pro bono": "done for free",
+    "pursuant to": "according to / following",
+    "notwithstanding": "despite / regardless of",
+    "hereinafter": "referred to from now on as",
+    "aforementioned": "previously mentioned",
+    "indemnify": "compensate for loss or damage",
+    "indemnification": "compensation for loss",
+    "herein": "in this document",
+    "hereby": "by means of this document",
+    "thereof": "of that thing",
+    "therein": "in that place or document",
+    "whereas": "considering that / since",
+    "forthwith": "immediately / without delay",
+    "henceforth": "from this point forward",
+    "shall": "must / will",
+    "liability": "legal responsibility",
+    "jurisdiction": "the authority of a court",
+    "arbitration": "settling a dispute outside court",
+    "tort": "a wrongful act leading to legal liability",
+    "plaintiff": "the person bringing a lawsuit",
+    "defendant": "the person being sued",
+    "statute": "a written law passed by a legislature",
+    "breach": "a violation of a law or agreement",
+    "fiduciary": "involving trust / acting in someone's best interest",
+    "lien": "a legal claim on property as security for a debt",
+    "waiver": "voluntarily giving up a right",
+    "stipulate": "demand or specify as part of an agreement",
+    "rescind": "revoke / cancel / repeal",
+    "subpoena": "a legal order to appear in court",
+    "affidavit": "a sworn written statement used as evidence",
+    "deposition": "a witness's sworn out-of-court testimony",
+    "negligence": "failure to take proper care",
+    "damages": "money claimed or awarded as compensation",
+    "injunction": "a court order to do or stop doing something",
+    "litigation": "the process of taking legal action",
+    "settlement": "an agreement to resolve a dispute without trial",
+    "covenant": "a formal agreement or promise",
+    "encumbrance": "a claim or restriction on property",
+    "estoppel": "prevented from denying something previously stated",
+    "adjudicate": "to make a formal judgment on a dispute",
+    "conveyance": "the legal process of transferring property",
+    "promissory": "containing or involving a promise",
+    "remuneration": "payment for work or services",
+    "severability": "if one part is invalid, the rest still applies",
+    "subordinate": "of lesser importance or rank",
+    "viz.": "namely",
+    "i.e.": "that is",
+    "e.g.": "for example",
 }
+
+PROMPT = """You are a legal document simplifier. Your job is to take complex legal text and explain it in simple, everyday English that anyone can understand.
+
+Follow this format:
+
+PLAIN ENGLISH SUMMARY:
+Write 2-4 sentences summarizing what the legal text means in simple words.
+
+KEY POINTS:
+• List each important obligation, right, or condition as a bullet point in plain language.
+
+LEGAL TERMS DECODED:
+• For each legal/Latin term found, write: "term" → simple meaning
+
+WHAT THIS MEANS FOR YOU:
+Write 1-2 sentences about the practical impact on the reader.
+
+Keep it friendly, clear, and avoid legal jargon in your explanation."""
 
 def local_simplify(text):
     if not text.strip():
         return "Please paste a legal document or clause to get a simplified explanation."
     lower = text.lower()
-    result = text
-    for term, simple in sorted(LEGAL_TERMS.items(), key=lambda x: -len(x[0])):
-        result = re.sub(re.escape(term), simple, result, flags=re.IGNORECASE)
-    sentences = re.split(r'(?<=[.!?])\s+', result.strip())
-    simplified = []
-    for s in sentences:
-        s = s.strip()
-        if len(s) > 10:
-            simplified.append(s)
-    out = " ".join(simplified) if simplified else result
-    found = [f"• \"{t}\" → {s}" for t, s in LEGAL_TERMS.items() if t in lower]
-    summary = f"SIMPLIFIED VERSION:\n{out}"
-    if found:
-        summary += "\n\nKEY TERMS EXPLAINED:\n" + "\n".join(found[:15])
-    return summary
+    replaced = text
+    found_terms = []
+    for term, simple in sorted(TERMS.items(), key=lambda x: -len(x[0])):
+        if term.lower() in lower:
+            found_terms.append((term, simple))
+            replaced = re.sub(re.escape(term), simple, replaced, flags=re.IGNORECASE)
+    sentences = re.split(r'(?<=[.;!?])\s+', replaced.strip())
+    clean = [s.strip() for s in sentences if len(s.strip()) > 10]
+    simplified_text = " ".join(clean) if clean else replaced
+    parts = ["PLAIN ENGLISH SUMMARY:", simplified_text, ""]
+    if found_terms:
+        parts.append("LEGAL TERMS DECODED:")
+        for t, s in found_terms[:20]:
+            parts.append(f'• "{t}" → {s}')
+        parts.append("")
+    word_count = len(text.split())
+    if word_count > 50:
+        parts.append("WHAT THIS MEANS FOR YOU:")
+        parts.append("This is a legal clause that defines specific obligations and rights. Read the simplified version above carefully to understand what you're agreeing to.")
+    return "\n".join(parts)
 
-async def try_groq(text):
-    key = os.environ.get("GROQ_API_KEY")
-    if not key:
-        return None
-    async with httpx.AsyncClient(timeout=10) as c:
-        r = await c.post("https://api.groq.com/openai/v1/chat/completions", headers={"Authorization": f"Bearer {key}"}, json={"model": "llama-3.3-70b-versatile", "messages": [{"role": "system", "content": "You simplify legal documents into plain English. Be concise and clear. List key terms and their meanings."}, {"role": "user", "content": f"Simplify this legal text:\n\n{text[:3000]}"}], "max_tokens": 1024})
-        return r.json()["choices"][0]["message"]["content"]
+async def call_api(url, key, model, text):
+    async with httpx.AsyncClient(timeout=12) as c:
+        r = await c.post(url, headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"}, json={
+            "model": model,
+            "messages": [
+                {"role": "system", "content": PROMPT},
+                {"role": "user", "content": f"Simplify this legal text:\n\n{text[:4000]}"}
+            ],
+            "max_tokens": 1500,
+            "temperature": 0.3
+        })
+        data = r.json()
+        if "choices" in data and len(data["choices"]) > 0:
+            content = data["choices"][0].get("message", {}).get("content", "")
+            if content and len(content) > 20:
+                return content
+    return None
 
-async def try_openrouter(text):
-    key = os.environ.get("OPENROUTER_API_KEY")
-    if not key:
-        return None
-    async with httpx.AsyncClient(timeout=10) as c:
-        r = await c.post("https://openrouter.ai/api/v1/chat/completions", headers={"Authorization": f"Bearer {key}"}, json={"model": "meta-llama/llama-3.3-70b-instruct:free", "messages": [{"role": "system", "content": "You simplify legal documents into plain English. Be concise."}, {"role": "user", "content": f"Simplify this legal text:\n\n{text[:3000]}"}], "max_tokens": 1024})
-        return r.json()["choices"][0]["message"]["content"]
+APIS = [
+    ("GROQ_API_KEY", "https://api.groq.com/openai/v1/chat/completions", "llama-3.3-70b-versatile"),
+    ("OPENROUTER_API_KEY", "https://openrouter.ai/api/v1/chat/completions", "meta-llama/llama-3.3-70b-instruct:free"),
+    ("HUGGINGFACE_API_KEY", "https://api-inference.huggingface.co/models/meta-llama/Llama-3.1-8B-Instruct/v1/chat/completions", "meta-llama/Llama-3.1-8B-Instruct"),
+]
 
 @app.post("/solve")
 async def solve(req: Req):
-    text = req.data.strip()
+    text = (req.data or "").strip()
     if not text:
         return {"output": "Please paste a legal document or clause to get a simplified explanation."}
-    for fn in [try_groq, try_openrouter]:
+    for env_key, url, model in APIS:
+        key = os.environ.get(env_key, "")
+        if not key:
+            continue
         try:
-            r = await fn(text)
-            if r:
-                return {"output": r}
+            result = await call_api(url, key, model, text)
+            if result:
+                return {"output": result}
         except Exception:
             continue
     return {"output": local_simplify(text)}
 
+BASE = pathlib.Path(__file__).parent
+
 @app.get("/")
 async def index():
-    with open("index.html") as f:
-        return HTMLResponse(f.read())
+    return HTMLResponse((BASE / "index.html").read_text())
 
 if __name__ == "__main__":
     import uvicorn

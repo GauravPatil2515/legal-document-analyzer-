@@ -65,6 +65,8 @@ input[type="file"]{display:none}
 .stat{flex:1;min-width:120px;background:rgba(15,12,41,.4);border:1px solid rgba(255,255,255,.06);border-radius:10px;padding:12px;text-align:center}
 .stat .val{font-size:1.4em;font-weight:700;color:#e8d5b7}
 .stat .lbl{font-size:11px;color:#666;margin-top:2px}
+.err-msg{display:none;color:#ef5350;font-size:13px;margin-top:8px;padding:8px 12px;background:rgba(239,83,80,.08);border:1px solid rgba(239,83,80,.2);border-radius:8px}
+.err-msg.show{display:block}
 .footer{text-align:center;padding:20px;color:#444;font-size:12px}
 @media(max-width:600px){.header h1{font-size:1.6em}.card{padding:18px}.tabs{flex-direction:column}.actions{flex-direction:column}.btn-clear{flex:1}}
 </style>
@@ -83,6 +85,7 @@ input[type="file"]{display:none}
 <div class="panel active" id="panel0">
 <textarea id="inp" placeholder="Paste your legal document, contract clause, NDA, terms of service, lease agreement, or any legal text here..."></textarea>
 <div class="char-count"><span id="charcount">0</span> characters</div>
+<div class="err-msg" id="errmsg"></div>
 <div class="samples">
 <div class="sample" onclick="loadSample(0)">&#128220; NDA Clause</div>
 <div class="sample" onclick="loadSample(1)">&#128209; Liability Waiver</div>
@@ -94,10 +97,10 @@ input[type="file"]{display:none}
 <div class="dropzone" id="dropzone" onclick="document.getElementById('fileinput').click()">
 <div class="icon">&#128194;</div>
 <p><strong>Drop your file here</strong> or click to browse</p>
-<p>Supports .txt, .pdf, .doc, .docx files</p>
+<p>Supports .txt files (plain text)</p>
 <div class="formats">Max file size: 5MB</div>
 </div>
-<input type="file" id="fileinput" accept=".txt,.pdf,.doc,.docx,.rtf,.text" onchange="handleFile(this)">
+<input type="file" id="fileinput" accept=".txt,.text,.rtf,.csv,.md,.log" onchange="handleFile(this)">
 <div class="file-info" id="fileinfo">
 <span>&#128196;</span>
 <span class="name" id="filename"></span>
@@ -140,11 +143,24 @@ document.querySelectorAll('.panel').forEach((p,j)=>{p.classList.toggle('active',
 }
 function loadSample(i){
 switchTab(0);
-const ta=document.getElementById('inp');ta.value=samples[i];
+const ta=document.getElementById('inp');
+ta.value=samples[i];
+ta.style.borderColor='rgba(255,255,255,.1)';
 document.getElementById('charcount').textContent=ta.value.length;
+hideErr();
 }
+function hideErr(){document.getElementById('errmsg').classList.remove('show')}
+function showErr(msg){const e=document.getElementById('errmsg');e.textContent=msg;e.classList.add('show')}
 document.getElementById('inp').addEventListener('input',function(){
 document.getElementById('charcount').textContent=this.value.length;
+this.style.borderColor='rgba(255,255,255,.1)';
+hideErr();
+});
+document.getElementById('inp').addEventListener('paste',function(){
+setTimeout(()=>{
+document.getElementById('charcount').textContent=this.value.length;
+hideErr();
+},50);
 });
 const dz=document.getElementById('dropzone');
 dz.addEventListener('dragover',e=>{e.preventDefault();dz.classList.add('drag')});
@@ -157,11 +173,15 @@ document.getElementById('filename').textContent=file.name+' ('+Math.round(file.s
 document.getElementById('fileinfo').classList.add('show');
 const reader=new FileReader();
 reader.onload=function(e){
+const text=e.target.result;
+if(!text||!text.trim()){showErr('The uploaded file appears to be empty.');return}
 const ta=document.getElementById('inp');
-ta.value=e.target.result;
+ta.value=text;
 document.getElementById('charcount').textContent=ta.value.length;
 switchTab(0);
+hideErr();
 };
+reader.onerror=function(){showErr('Could not read the file. Please try a .txt file.')};
 reader.readAsText(file);
 }
 function removeFile(){
@@ -174,36 +194,65 @@ document.getElementById('charcount').textContent='0';
 document.getElementById('out').className='out empty';
 document.getElementById('out').textContent='Your simplified explanation will appear here...';
 document.getElementById('stats').style.display='none';
+document.getElementById('inp').style.borderColor='rgba(255,255,255,.1)';
+hideErr();
 removeFile();
 }
 function copyOut(){
 const t=document.getElementById('out').textContent;
+if(!t||t==='Your simplified explanation will appear here...')return;
 navigator.clipboard.writeText(t).then(()=>{
 const b=document.querySelector('.copy-btn');b.textContent='\u2713 Copied!';
 setTimeout(()=>b.textContent='\ud83d\udccb Copy',1500);
 });
 }
 async function run(){
-const b=document.getElementById('btn'),o=document.getElementById('out'),t=document.getElementById('inp').value,l=document.getElementById('loader');
+const b=document.getElementById('btn'),o=document.getElementById('out'),l=document.getElementById('loader');
+const ta=document.getElementById('inp');
+const t=ta.value.trim();
+hideErr();
+if(!t){
+ta.style.borderColor='#ef5350';
+showErr('Please paste or type some legal text, or upload a file first.');
+ta.focus();
+return;
+}
+if(t.length<10){
+ta.style.borderColor='#ef5350';
+showErr('Input is too short. Please paste a complete legal clause or paragraph.');
+ta.focus();
+return;
+}
+ta.style.borderColor='rgba(255,255,255,.1)';
 b.disabled=true;b.innerHTML='&#9878; Analyzing...';
 o.className='out empty';o.textContent='';
 l.classList.add('show');
 document.getElementById('stats').style.display='none';
 try{
 const r=await fetch('/solve',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({data:t})});
+if(!r.ok)throw new Error('Server returned '+r.status);
 const j=await r.json();
 l.classList.remove('show');
+if(!j.output){throw new Error('Empty response from server')}
 o.className='out';o.textContent=j.output;
-const words=t.trim().split(/\s+/).filter(w=>w).length;
-const outWords=j.output.trim().split(/\s+/).filter(w=>w).length;
-const terms=(j.output.match(/•/g)||[]).length;
+const words=t.split(/\s+/).filter(w=>w).length;
+const outWords=j.output.split(/\s+/).filter(w=>w).length;
+const terms=(j.output.match(/\u2022/g)||[]).length;
 document.getElementById('s_words').textContent=words;
-document.getElementById('s_reduction').textContent=words>0?Math.round((1-outWords/Math.max(words,1))*100)+'%':'—';
-document.getElementById('s_terms').textContent=terms||'—';
+document.getElementById('s_reduction').textContent=words>0?Math.round(Math.abs(1-outWords/Math.max(words,1))*100)+'%':'\u2014';
+document.getElementById('s_terms').textContent=terms||'\u2014';
 document.getElementById('stats').style.display='flex';
-}catch(e){l.classList.remove('show');o.className='out';o.textContent='Error: '+e.message;}
+o.scrollIntoView({behavior:'smooth',block:'nearest'});
+}catch(e){
+l.classList.remove('show');
+o.className='out';
+o.textContent='Something went wrong: '+e.message+'. Please try again.';
+}
 b.disabled=false;b.innerHTML='&#9878; Simplify Document';
 }
+document.getElementById('inp').addEventListener('keydown',function(e){
+if((e.ctrlKey||e.metaKey)&&e.key==='Enter')run();
+});
 </script>
 </body>
 </html>
